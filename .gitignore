@@ -1,0 +1,19 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+
+# local env / secrets
+.env
+.env.local
+.env.*.local
+
+# vite cache
+.vite/
+
+# OS
+.DS_Store
+
+# editor
+.vscode/

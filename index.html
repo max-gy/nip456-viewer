@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NIP-456 Viewer</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header>
+        <h1>NIP-456 Health Data Viewer</h1>
+        <p class="subtitle">Read-only viewer — decryption via remote signer (NIP-46)</p>
+      </header>
+
+      <!-- ── Step 1: Connect remote signer ── -->
+      <section id="section-connect" class="card">
+        <h2><span class="step">1</span> Connect Remote Signer</h2>
+        <div class="field-row">
+          <label for="signer-relay">Signer relay</label>
+          <input
+            id="signer-relay"
+            type="text"
+            placeholder="wss://relay.nsec.app"
+            value="wss://relay.nsec.app"
+          />
+        </div>
+        <button id="btn-connect">Generate Connect URI</button>
+
+        <div id="connect-result" class="hidden">
+          <div id="qr-container"></div>
+          <p class="uri-label">Or copy the nostrconnect URI:</p>
+          <div class="uri-box">
+            <code id="connect-uri"></code>
+            <button id="btn-copy-uri" class="btn-sm">Copy</button>
+          </div>
+          <p id="connect-status" class="status waiting">Waiting for signer approval…</p>
+        </div>
+      </section>
+
+      <!-- ── Step 2: Browse datasets ── -->
+      <section id="section-browse" class="card hidden">
+        <h2><span class="step">2</span> Browse Datasets</h2>
+        <div class="pubkey-row">
+          Connected as: <code id="connected-pubkey"></code>
+          <button id="btn-disconnect" class="btn-sm btn-danger">Disconnect</button>
+        </div>
+        <div class="field-row">
+          <label for="data-relay">Data relay</label>
+          <input
+            id="data-relay"
+            type="text"
+            placeholder="wss://relay.example.com"
+          />
+        </div>
+        <button id="btn-load">Load Datasets</button>
+        <p id="load-status" class="status hidden"></p>
+
+        <div id="dataset-list" class="dataset-grid"></div>
+      </section>
+
+      <!-- ── Step 3: Dataset detail ── -->
+      <section id="section-detail" class="card hidden">
+        <div class="detail-header">
+          <button id="btn-back" class="btn-sm">← Back</button>
+          <h2 id="detail-title"></h2>
+        </div>
+        <p id="detail-status" class="status hidden"></p>
+        <div id="detail-content"></div>
+      </section>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

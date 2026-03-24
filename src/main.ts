@@ -1,7 +1,10 @@
 import QRCode from 'qrcode';
+import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend } from 'chart.js';
 import { type NostrEvent } from 'nostr-tools';
 import { initBunker, awaitBunkerConnection, getConnectedPubKey, decryptWithBunker, isConnected, clearSession, restoreSession, DEFAULT_SIGNER_RELAYS } from './bunker';
 import { fetchMetadataEvents, fetchDatasetEvents } from './nostr';
+
+Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend);
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -179,9 +182,13 @@ btnLoad.addEventListener('click', async () => {
 
     const seen = new Map<string, DatasetSummary>();
 
+    let decryptedCount = 0;
+
     for (const event of events) {
       try {
         const decrypted = await decryptWithBunker(pubkey, event.content);
+        decryptedCount++;
+        setStatus(loadStatus, statusMsg + ` ${decryptedCount} decrypted.`, 'loading');
         const content: Nip456EventContent = JSON.parse(decrypted);
         const dTag = event.tags.find(t => t[0] === 'd');
         if (!dTag) continue;
@@ -261,14 +268,17 @@ async function openDataset(ds: DatasetSummary, relayUrl: string) {
       return;
     }
 
+    let encryptedCount = 0;
     setStatus(detailStatus, `Decrypting ${events.length} event(s)…`, 'loading');
 
-    interface Row { startDate: number; endDate: number; interval: string; dataType: string; source: string; data: number[][]; info?: string; }
+    interface Row { startDate: number; endDate: number; interval: string; dataType: string; source: string; applicationSource: string; data: number[][]; info?: string; }
     const rows: Row[] = [];
 
     for (const event of events) {
       try {
         const decrypted = await decryptWithBunker(pubkey, event.content);
+        encryptedCount++;
+        setStatus(detailStatus, `Decrypting ${events.length} event(s)… ${encryptedCount} decrypted.`, 'loading');
         const content: Nip456EventContent = JSON.parse(decrypted);
         rows.push(content);
       } catch {
@@ -282,8 +292,14 @@ async function openDataset(ds: DatasetSummary, relayUrl: string) {
     }
 
     rows.sort((a, b) => a.startDate - b.startDate);
+
+    const first = rows[0];
+    if (first) {
+      detailTitle.innerHTML = `${escapeHtml(ds.datasetName)}<div class="detail-meta">Source: ${escapeHtml(first.source)} &middot; App: ${escapeHtml(first.applicationSource)}</div>`;
+    }
+
     detailStatus.classList.add('hidden');
-    renderDetailTable(rows);
+    renderDetailChart(rows);
 
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -291,44 +307,49 @@ async function openDataset(ds: DatasetSummary, relayUrl: string) {
   }
 }
 
-function renderDetailTable(rows: { startDate: number; endDate: number; interval: string; dataType: string; source: string; data: number[][]; info?: string }[]) {
-  const wrap = document.createElement('div');
-  wrap.className = 'event-table-wrap';
-  wrap.innerHTML = `
-    <table>
-      <thead>
-        <tr>
-          <th>Start</th>
-          <th>End</th>
-          <th>Interval</th>
-          <th>Type</th>
-          <th>Source</th>
-          <th>Data points</th>
-          <th>Values</th>
-        </tr>
-      </thead>
-      <tbody id="detail-tbody"></tbody>
-    </table>
-  `;
+let activeChart: Chart | null = null;
 
-  detailContent.appendChild(wrap);
-  const tbody = document.getElementById('detail-tbody')!;
+function renderDetailChart(rows: { startDate: number; endDate: number; interval: string; dataType: string; source: string; applicationSource: string; data: number[][]; info?: string }[]) {
+  // Take the last 30 rows; each bar = sum of all values for that date
+  const last30 = rows.slice(-30);
 
-  for (const row of rows) {
-    const flat = row.data.flat();
-    const preview = flat.slice(0, 8).join(', ') + (flat.length > 8 ? ` … (+${flat.length - 8} more)` : '');
-    const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td>${formatDateTime(row.startDate)}</td>
-      <td>${formatDateTime(row.endDate)}</td>
-      <td>${escapeHtml(row.interval)}</td>
-      <td>${escapeHtml(row.dataType)}</td>
-      <td>${escapeHtml(row.source)}</td>
-      <td>${flat.length}</td>
-      <td class="data-values">${escapeHtml(preview)}</td>
-    `;
-    tbody.appendChild(tr);
+  const labels = last30.map(r => formatDate(r.startDate));
+  const values = last30.map(r => r.data.flat().reduce((sum, v) => sum + v, 0));
+
+  const dataType = last30[0]?.dataType ?? 'Value';
+
+  const canvas = document.createElement('canvas');
+  detailContent.appendChild(canvas);
+
+  if (activeChart) {
+    activeChart.destroy();
+    activeChart = null;
   }
+
+  activeChart = new Chart(canvas, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: dataType,
+        data: values,
+        backgroundColor: 'rgba(99, 132, 255, 0.6)',
+        borderColor: 'rgba(99, 132, 255, 1)',
+        borderWidth: 1,
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: true, position: 'top' },
+        tooltip: { mode: 'index', intersect: false },
+      },
+      scales: {
+        x: { title: { display: true, text: 'Date' } },
+        y: { title: { display: true, text: dataType }, beginAtZero: true },
+      },
+    },
+  });
 }
 
 // ── Back button ───────────────────────────────────────────────────────────

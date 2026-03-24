@@ -291,6 +291,13 @@ button:disabled {
   font-size: 1.05rem;
 }
 
+.detail-meta {
+  font-size: 0.78rem;
+  font-weight: 400;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
 /* Event table */
 .event-table-wrap {
   overflow-x: auto;

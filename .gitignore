@@ -17,3 +17,7 @@ dist/
 
 # editor
 .vscode/
+
+.dockerignore
+Dockerfile
+docker-compose.yml

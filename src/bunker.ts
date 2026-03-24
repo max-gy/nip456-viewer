@@ -24,12 +24,18 @@ const APP_NAME = 'NIP-456-Viewer';
 const APP_URL = 'https://soundhsa.com';
 const TIMEOUT_MS = 120_000;
 
+export const DEFAULT_SIGNER_RELAYS = [
+  'wss://nos.lol',
+  'wss://nostr.bitcoiner.social',
+  'wss://relay.primal.net',
+];
+
 const SESSION_STORAGE_KEY = 'nip456_bunker_session';
 
 interface StoredSession {
   localPrivKeyHex: string;
   bunkerPubkey: string;
-  signerRelay: string;
+  signerRelays: string[];
   secret: string;
   connectedPubKey: string;
 }
@@ -39,7 +45,7 @@ let bunkerConnectionPromise: Promise<BunkerSigner> | null = null;
 let pool: SimplePool | null = null;
 let localPrivKey: Uint8Array | null = null;
 let connectedPubKey: string | null = null;
-let storedSignerRelay: string | null = null;
+let storedSignerRelays: string[] | null = null;
 let storedSecret: string | null = null;
 let storedBunkerPubkey: string | null = null;
 
@@ -53,18 +59,51 @@ export function getPool(): SimplePool {
 }
 
 /**
+ * Tears down the current pool and bunker, then creates fresh instances
+ * from the stored session state. This forces new WebSocket connections
+ * to the relay, working around stale/cached connections in SimplePool.
+ */
+function reconnectBunker(): void {
+  if (!localPrivKey || !storedBunkerPubkey || !storedSignerRelays?.length) {
+    throw new Error('Cannot reconnect — missing session state');
+  }
+
+  // Close the old bunker subscription if still around
+  try { bunker?.close(); } catch { /* already closed */ }
+
+  // Destroy the old pool so SimplePool doesn't reuse a dead websocket
+  try { pool?.destroy(); } catch { /* ignore */ }
+  pool = null;
+
+  const signerParams: BunkerSignerParams = {
+    pool: getPool(),
+    onauth: (authUrl: string) => {
+      window.open(authUrl, '_blank');
+    },
+  };
+
+  bunker = BunkerSigner.fromBunker(localPrivKey, {
+    pubkey: storedBunkerPubkey,
+    relays: storedSignerRelays,
+    secret: storedSecret || '',
+  }, signerParams);
+
+  console.debug('Bunker reconnected with fresh pool/subscription');
+}
+
+/**
  * Generates an ephemeral keypair, builds a nostrconnect:// URI and starts
  * listening for the remote signer approval.
  *
  * Returns the URI string — render it as a QR code and/or copy link.
  * Call awaitConnection() after to wait until the signer approves.
  */
-export async function initBunker(signerRelay: string): Promise<string> {
+export async function initBunker(signerRelays: string[]): Promise<string> {
   // Reset any previous state
   bunker = null;
   bunkerConnectionPromise = null;
   connectedPubKey = null;
-  storedSignerRelay = null;
+  storedSignerRelays = null;
   storedSecret = null;
   storedBunkerPubkey = null;
 
@@ -72,12 +111,12 @@ export async function initBunker(signerRelay: string): Promise<string> {
   localPrivKey = sk;
   const localPubKey = getPublicKey(sk);
   const secret = bytesToHex(generateSecretKey()).slice(0, 16);
-  storedSignerRelay = signerRelay;
+  storedSignerRelays = signerRelays;
   storedSecret = secret;
 
   const params: NostrConnectParams = {
     clientPubkey: localPubKey,
-    relays: [signerRelay],
+    relays: signerRelays,
     secret,
     perms: PERMISSIONS,
     name: encodeURIComponent(APP_NAME),
@@ -114,7 +153,7 @@ export async function initBunker(signerRelay: string): Promise<string> {
     }, TIMEOUT_MS);
 
     const sub = getPool().subscribe(
-      [signerRelay],
+      signerRelays,
       { kinds: [24133], '#p': [clientPubKey], limit: 0 },
       {
         onevent: (event) => {
@@ -130,7 +169,7 @@ export async function initBunker(signerRelay: string): Promise<string> {
 
             const signer = BunkerSigner.fromBunker(localPrivKey!, {
               pubkey: event.pubkey,
-              relays: [signerRelay],
+              relays: signerRelays,
               secret,
             }, signerParams);
 
@@ -166,11 +205,11 @@ export async function awaitBunkerConnection(): Promise<void> {
 }
 
 function saveSession(): void {
-  if (!localPrivKey || !connectedPubKey || !storedBunkerPubkey || !storedSignerRelay || !storedSecret) return;
+  if (!localPrivKey || !connectedPubKey || !storedBunkerPubkey || !storedSignerRelays?.length || !storedSecret) return;
   const session: StoredSession = {
     localPrivKeyHex: bytesToHex(localPrivKey),
     bunkerPubkey: storedBunkerPubkey,
-    signerRelay: storedSignerRelay,
+    signerRelays: storedSignerRelays,
     secret: storedSecret,
     connectedPubKey,
   };
@@ -182,15 +221,16 @@ export function clearSession(): void {
   bunker = null;
   localPrivKey = null;
   connectedPubKey = null;
-  storedSignerRelay = null;
+  storedSignerRelays = null;
   storedSecret = null;
   storedBunkerPubkey = null;
 }
 
 /**
  * Attempts to restore a previously saved bunker session from localStorage.
+ * Creates a fresh pool + subscription so we don't reuse stale websockets
+ * from a previous page load.
  * Returns the connected pubkey on success, or null if no valid session exists.
- * This is synchronous and does not verify the remote signer is reachable.
  */
 export function restoreSession(): string | null {
   const raw = localStorage.getItem(SESSION_STORAGE_KEY);
@@ -199,7 +239,7 @@ export function restoreSession(): string | null {
   let session: StoredSession;
   try {
     session = JSON.parse(raw) as StoredSession;
-    if (!session.localPrivKeyHex || !session.bunkerPubkey || !session.signerRelay || !session.connectedPubKey) {
+    if (!session.localPrivKeyHex || !session.bunkerPubkey || !session.signerRelays?.length || !session.connectedPubKey) {
       clearSession();
       return null;
     }
@@ -209,26 +249,16 @@ export function restoreSession(): string | null {
   }
 
   try {
-    const sk = hexToBytes(session.localPrivKeyHex);
-    localPrivKey = sk;
+    localPrivKey = hexToBytes(session.localPrivKeyHex);
     storedBunkerPubkey = session.bunkerPubkey;
-    storedSignerRelay = session.signerRelay;
+    storedSignerRelays = session.signerRelays;
     storedSecret = session.secret;
-
-    const signerParams: BunkerSignerParams = {
-      pool: getPool(),
-      onauth: (authUrl: string) => {
-        window.open(authUrl, '_blank');
-      },
-    };
-
-    bunker = BunkerSigner.fromBunker(sk, {
-      pubkey: session.bunkerPubkey,
-      relays: [session.signerRelay],
-      secret: session.secret,
-    }, signerParams);
-
     connectedPubKey = session.connectedPubKey;
+
+    // Force a fresh pool + subscription so we don't reuse a stale websocket
+    // left over from the previous page load.
+    reconnectBunker();
+
     return connectedPubKey;
   } catch {
     clearSession();

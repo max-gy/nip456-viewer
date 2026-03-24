@@ -1,6 +1,6 @@
 import QRCode from 'qrcode';
 import { type NostrEvent } from 'nostr-tools';
-import { initBunker, awaitBunkerConnection, getConnectedPubKey, decryptWithBunker, isConnected, clearSession, restoreSession } from './bunker';
+import { initBunker, awaitBunkerConnection, getConnectedPubKey, decryptWithBunker, isConnected, clearSession, restoreSession, DEFAULT_SIGNER_RELAYS } from './bunker';
 import { fetchMetadataEvents, fetchDatasetEvents } from './nostr';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -26,7 +26,7 @@ interface DatasetSummary {
 
 // ── DOM refs ───────────────────────────────────────────────────────────────
 
-const signerRelayInput  = document.getElementById('signer-relay')   as HTMLInputElement;
+const signerRelaysInput  = document.getElementById('signer-relays')  as HTMLTextAreaElement;
 const btnConnect        = document.getElementById('btn-connect')     as HTMLButtonElement;
 const connectResult     = document.getElementById('connect-result')!;
 const qrContainer       = document.getElementById('qr-container')!;
@@ -81,9 +81,12 @@ function formatDateTime(ts: number): string {
 // ── Step 1: Connect remote signer ─────────────────────────────────────────
 
 btnConnect.addEventListener('click', async () => {
-  const signerRelay = signerRelayInput.value.trim();
-  if (!signerRelay) {
-    setStatus(connectStatus, 'Please enter a signer relay URL.', 'error');
+  const signerRelays = signerRelaysInput.value
+    .split('\n')
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  if (signerRelays.length === 0) {
+    setStatus(connectStatus, 'Please enter at least one signer relay URL.', 'error');
     connectResult.classList.remove('hidden');
     return;
   }
@@ -94,7 +97,7 @@ btnConnect.addEventListener('click', async () => {
   setStatus(connectStatus, 'Generating connect URI…', 'loading');
 
   try {
-    const uri = await initBunker(signerRelay);
+    const uri = await initBunker(signerRelays);
 
     // Render QR code immediately so the user can scan it
     qrContainer.innerHTML = '';
@@ -171,8 +174,8 @@ btnLoad.addEventListener('click', async () => {
       btnLoad.textContent = 'Load Datasets';
       return;
     }
-
-    setStatus(loadStatus, `Decrypting ${events.length} metadata event(s)…`, 'loading');
+    const statusMsg = `Found ${events.length} metadata event(s).`;
+    setStatus(loadStatus, statusMsg, 'loading');
 
     const seen = new Map<string, DatasetSummary>();
 
@@ -200,6 +203,8 @@ btnLoad.addEventListener('click', async () => {
         // Skip events that fail to decrypt
       }
     }
+
+    setStatus(loadStatus, statusMsg + ` ${seen.size} dataset(s) decrypted.`, 'loading');
 
     if (seen.size === 0) {
       setStatus(loadStatus, 'Could not decrypt any metadata events. Make sure you are using the correct signer.', 'error');
